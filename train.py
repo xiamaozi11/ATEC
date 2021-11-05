@@ -1,18 +1,11 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedKFold,KFold
 from tqdm import tqdm
 import json
-# import tensorflow as tf
-# import tensorflow.keras.backend as K
-# from tensorflow.keras.utils import to_categorical
-# from tensorflow.keras.utils.np_utils import to_categorical
-# from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 import os
-from transformers import *
-# print(tf.__version__)
 from torch.utils import data
 import torch
 import torch.nn as nn
@@ -22,54 +15,39 @@ from torch.optim.optimizer import Optimizer
 import time
 from torch.nn import DataParallel
 import gc
-from sklearn.metrics import f1_score, accuracy_score,roc_auc_score,auc,classification_report,precision_score
+from sklearn.metrics import f1_score, accuracy_score,roc_auc_score,auc,precision_score,recall_score
 #from apex import amp
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 # from nezha import *
+from transformers import *
 from transformers import BertTokenizer
-# import argparse
-# parser = argparse.ArgumentParser(description="Help info.")
-# parser.add_argument('--input', type=str, help='input path of the dataset directory.')
-# parser.add_argument('--output', type=str, help='output path of the prediction file.')
+import argparse
 
-# #If you need models from the server:
-# huggingface = '/work/mayixiao/CAIL2021/root/big/huggingface'
-# tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.huggingface, "thunlp/Lawformer"))
-# model = AutoModelForMaskedLM.from_pretrained(os.path.join(args.huggingface, "thunlp/Lawformer"))
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# args = parser.parse_args()
-# input_path = args.input
-# output_path = args.output
-with open('train.txt','r',encoding='utf-8') as f:
-    data = f.readlines()
-with open('labels.txt','r',encoding='utf-8') as f:
-    data_labels = f.readlines()
-texts=[]
+input_data_path = '/home/admin/workspace/job/input/train.jsonl'
+output_model_path = '/home/admin/workspace/job/output/your-model-name'
+result_path = '/home/admin/workspace/job/output/result.json'
+
+with open(input_data_path, 'r', encoding='utf-8') as fp:
+    data = fp.readlines()
+texts = []
+ids=[]
 labels=[]
-print(len(data))
-print(len(data_labels))
-for i in range(len(data)):
-    d = ' '.join(data[i].replace('\n','').split(','))
-    l = int(data_labels[i].replace('\n',''))
-    texts.append(d)
-    labels.append(l)
-df = pd.DataFrame(columns=['texts','labels'])
+for d in data:
+    tmp = json.loads(d)
+    texts.append(str(tmp['x269']) +' '+str(tmp['x321']) +' '+str(tmp['x479']) +' '+str(tmp['x459']) +' '+str(tmp['x117'])+' '+str(tmp['x30'])+' '+str(tmp['x379'])+' '+ str(tmp['memo_polish']))
+    ids.append(tmp['id'])
+    labels.append(tmp['label'])
+df = pd.DataFrame(columns=['id','text','label'])
+df['label'] = labels
 df['text']=texts
-df['label']=labels
+df['id'] = ids
+
 df_train = df
-# df_train = pd.read_csv('data/train.tsv',sep='\t',header=None)
-# df_train.columns=['label','q1','q2']
 df_train = df_train[df_train.label!=-1]
-df_test = df_train
-# df_test.columns=['q1','q2']
-
 df_train['text'] = df_train['text'].astype(str)
-df_test['text'] = df_test['text'].astype(str)
-train_id = np.arange(0,len(df_train),1)
-df_train['id'] =train_id
-
-test_id = np.arange(0,len(df_test),1)
-df_test['id'] =test_id
+df_train.index=range(len(df_train))
 
 # df_train = df_train[0:1000]
 # df_test = df_test[0:1000]
@@ -83,15 +61,15 @@ SEED = 2020
 PATH = './'
 BERT_PATH = './'
 WEIGHT_PATH = './'
-MAX_SEQUENCE_LENGTH = 80
+MAX_SEQUENCE_LENGTH = 86
 input_categories = ['text']
 output_categories = 'label'
-modelname='roberta-base'
-pretraindir = '/data/work/data/cn_model/chinese_roberta_wwm_ext_pytorch'
-outputdir='roberta_basex2'
+modelname='bert-base'
+pretraindir = './bert_wwm_pretrain'
+outputdir='/home/admin/workspace/job/output/bert_wwm'
 
 print('train shape =', df_train.shape)
-print('test shape =', df_test.shape)
+# print('test shape =', df_test.shape)
 try:
     os.mkdir(outputdir)
 except:
@@ -159,21 +137,49 @@ def search_auc(y_true, y_pred):
     print('best', best)
     print('thres', best_t)
     return best, best_t
-
 def search_f1(y_true, y_pred):
     best = 0
     best_t = 0
-    for i in range(50,51):
+    re_score90 = 0
+    re_score85 = 0
+    re_score80 = 0
+    pre_score90 = 0
+    pre_score85= 0
+    pre_score80 = 0
+    for i in range(1,100):
         tres = i / 100
         y_pred_bin =  (y_pred > tres).astype(int)
-        score = precision_score(y_true, y_pred_bin)
-        print(classification_report(y_true, y_pred_bin))
+        pre_score  = precision_score(y_true, y_pred_bin)
+        if pre_score >=0.9:
+            re_score = recall_score(y_true, y_pred_bin)
+            if re_score > re_score90:
+                re_score90 = re_score 
+        if pre_score >=0.85:
+            re_score = recall_score(y_true, y_pred_bin)
+            if re_score > re_score85:
+                re_score85 = re_score 
+        if pre_score >=0.80:
+            re_score = recall_score(y_true, y_pred_bin)
+            if re_score > re_score80:
+                re_score80 = re_score             
+        score = f1_score(y_true, y_pred_bin)
+        best = re_score90 * 0.4 + re_score85 *0.3 +re_score80*0.3
+    print('best', best)
+    print('thres', best_t)
+    
+    return best, best_t
+def search_f11(y_true, y_pred):
+    best = 0
+    best_t = 0
+    for i in range(1,100):
+        tres = i / 100
+        y_pred_bin =  (y_pred > tres).astype(int)
+        score = f1_score(y_true, y_pred_bin)
         if score > best:
             best = score
             best_t = tres
     print('best', best)
     print('thres', best_t)
-    
     return best, best_t
 
 if modelname == 'bert-base':
@@ -198,7 +204,7 @@ elif modelname == 'macbert_large':
     tokenizer =  BertTokenizer.from_pretrained(f"{pretraindir}/vocab.txt")
 
 inputs = compute_input_arrays(df_train, input_categories, tokenizer, MAX_SEQUENCE_LENGTH)
-test_inputs = compute_input_arrays(df_test, input_categories, tokenizer, MAX_SEQUENCE_LENGTH)
+# test_inputs = compute_input_arrays(df_test, input_categories, tokenizer, MAX_SEQUENCE_LENGTH)
 def compute_output_arrays(df, columns):
     return np.asarray(df[columns]).reshape(-1,1)
 
@@ -310,9 +316,9 @@ def create_model(modelname):
     if modelname == 'bert-base':
         model=BertClassificationHeadModel(f'{pretraindir}', n_class=1)
     elif modelname == 'roberta-large':
-        model=BertClassificationHeadModel(f'{pretraindir}', n_class=1)
+        model=RobertaClassificationModel(f'{pretraindir}', n_class=1)
     elif modelname == 'roberta-base':
-        model=BertClassificationHeadModel(f'{pretraindir}', n_class=1)
+        model=RobertaClassificationModel(f'{pretraindir}', n_class=1)
     elif modelname == 'bert-base-wwm':
         model=BertClassificationHeadModel(f'{pretraindir}', n_class=1)
     elif modelname == 'bert-base-wwm-ext':
@@ -329,7 +335,7 @@ def create_model(modelname):
         model =  RobertaClassificationModel(f'{pretraindir}', n_class=1)
                       
         
-    model = model.cuda()
+    model = model.to(device)
     return model
 
 class FGM():
@@ -363,7 +369,7 @@ class FGM():
 from sklearn.model_selection import GroupKFold
 def train(n_epochs):
     train_preds = np.zeros((len(df_train),1))
-    test_preds = np.zeros((len(df_test),1))
+#     test_preds = np.zeros((len(df_test),1))
     batch_size = 32
     step_size = 300
     base_lr, max_lr = 2e-5, 5e-5 
@@ -404,7 +410,7 @@ def train(n_epochs):
         loss_fn = torch.nn.BCELoss(reduction='mean')
         
         valid_preds_fold= np.zeros((len(valid_idx),1))
-        test_preds_fold= np.zeros((len(df_test),1))
+#         test_preds_fold= np.zeros((len(df_test),1))
         print(f'Fold {fold + 1}')
         best_f1 = 0
         gradient_accumulation_steps =1
@@ -417,8 +423,8 @@ def train(n_epochs):
             steps_per_epoch = int(len(train_loader))
             with tqdm(total=int(steps_per_epoch), desc='Epoch %d' % (epoch + 1)) as pbar:
                 for ii,(x_batch,y_batch) in enumerate(train_loader):
-                    ids, atts, segs = x_batch[0].cuda(),x_batch[1].cuda(),x_batch[2].cuda()
-                    y_batch=Variable(y_batch).cuda()
+                    ids, atts, segs = x_batch[0].to(device),x_batch[1].to(device),x_batch[2].to(device)
+                    y_batch=Variable(y_batch).to(device)
                     y_pred = model(input_ids = ids,position_ids=atts,token_type_ids =segs)
 
                     y_pred = torch.nn.functional.sigmoid(y_pred)
@@ -446,8 +452,8 @@ def train(n_epochs):
             avg_val_loss = 0.
             with torch.no_grad():                
                 for i, (x_batch, y_batch) in enumerate(valid_loader):
-                    ids, atts, segs = x_batch[0].cuda(),x_batch[1].cuda(),x_batch[2].cuda()
-                    y_batch=Variable(y_batch).cuda()
+                    ids, atts, segs = x_batch[0].to(device),x_batch[1].to(device),x_batch[2].to(device)
+                    y_batch=Variable(y_batch).to(device)
                     y_pred = model(input_ids = ids,position_ids=atts,token_type_ids =segs)
                     y_pred = torch.nn.functional.sigmoid(y_pred)
                     #print(y_pred)
@@ -457,10 +463,8 @@ def train(n_epochs):
 
                 elapsed_time = time.time() - start_time
                 assert len(valid_preds_fold) == len(outputs[valid_idx])
-                #print(valid_preds_fold)
-#                 f1 = search_f1(outputs[valid_idx], valid_preds_fold)
+
                 f1,t = search_f1(outputs[valid_idx],valid_preds_fold)
-                
                 acc = t
                 if f1 > best_f1:
                     
@@ -478,29 +482,11 @@ def train(n_epochs):
         del model,train_dataset,valid_dataset, train_loader, valid_loader,train_outputs,valid_outputs,param_optimizer,optimizer_grouped_parameters
         gc.collect()
         torch.cuda.empty_cache()
-        with torch.no_grad():
-            model = create_model(modelname)
-            model.load_state_dict(torch.load(f'{outputdir}/'+ modelname+ str(fold)+'_latest3.h5'))
-            if torch.cuda.device_count() > 1:
-                model = DataParallel(model)
-            model.eval()
-
-            test_dataset = DFData(test_inputs,None, augument=False,training=False)
-            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-            for i, x_batch in enumerate(test_loader):
-                ids, atts, segs = x_batch[0].cuda(),x_batch[1].cuda(),x_batch[2].cuda()
-                y_pred = model(input_ids = ids,position_ids=atts, token_type_ids =segs)
-                y_pred = torch.nn.functional.sigmoid(y_pred)
-                test_preds_fold[i * batch_size:(i+1) * batch_size] = y_pred.cpu().numpy()
-            test_preds += test_preds_fold / 5
-            del model, test_dataset, test_loader
-            gc.collect()
-        torch.cuda.empty_cache()
+        
         best_score_f+=best_f1
-    return train_preds,test_preds,best_score_f/5
+    return train_preds,best_score_f/5
 
-train_preds,test_preds,best_score = train(3)
+train_preds,best_score = train(3)
 # search_f1(outputs,train_preds)
 
 torch.cuda.empty_cache()
@@ -517,33 +503,33 @@ print(best_t)
 
 np.save(f'{outputdir}/oof_id_{modelname}_{best_score}.npy',train_preds)
 np.save(f'{outputdir}/sub_id_{modelname}_{best_score}.npy',test_preds)
-sub = test_preds#np.average(test_preds, axis=0) 
-sub = sub > best_t
-df_test['label'] = sub.astype(int)
+# sub = test_preds#np.average(test_preds, axis=0) 
+# # sub = sub > 0.9
+# # df_test['label'] = sub.astype(int)
 
-new_result = []
+# new_result = []
 
-for i in range(len(df_test)):
-    label = df_test['label'][i]
-    if label==1:        
-        new_result.append({ "label": 1})
-    else:
-        new_result.append({ "label": 0})
-new_result
+# for i in range(len(df_test)):
+#     label = df_test['label'][i]
+#     if label==1:        
+#         new_result.append({ "label": 1})
+#     else:
+#         new_result.append({ "label": 0})
+# new_result
 
 
-class NpEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        else:
-            return super(NpEncoder, self).default(obj)
-with open(f'{outputdir}/result_{best_score}.json', 'w', encoding='utf-8') as fo:      
-    for d in new_result: 
-        fo.write(json.dumps(d,ensure_ascii=False, cls=NpEncoder))
-        fo.write('\n')
-fo.close()     
+# class NpEncoder(json.JSONEncoder):
+#     def default(self, obj):
+#         if isinstance(obj, np.integer):
+#             return int(obj)
+#         elif isinstance(obj, np.floating):
+#             return float(obj)
+#         elif isinstance(obj, np.ndarray):
+#             return obj.tolist()
+#         else:
+#             return super(NpEncoder, self).default(obj)
+# with open(f'{outputdir}/result_{best_score}.json', 'w', encoding='utf-8') as fo:      
+#     for d in new_result: 
+#         fo.write(json.dumps(d,ensure_ascii=False, cls=NpEncoder))
+#         fo.write('\n')
+# fo.close()     
